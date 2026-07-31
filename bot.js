@@ -9,6 +9,9 @@ const WALLET_ADDRESS = process.env.WALLET_ADDRESS; // آدرس کیف پول USD
 const BASE_PRICE = parseFloat(process.env.PRICE || '50'); // قیمت پایه به دلار (USDT)
 const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'; // آدرس قرارداد USDT در شبکه ترون
 const ORDERS_FILE = './orders.json';
+// حالت تست: اگه TEST_MODE=true باشه، ربات بدون چک واقعی بلاکچین همه‌ی پرداخت‌ها رو
+// «تایید‌شده» در نظر می‌گیره تا بتونی بدون واریز واقعی، بقیه مراحل رو امتحان کنی.
+const TEST_MODE = process.env.TEST_MODE === 'true';
 
 // ---------- ابزارهای ذخیره‌سازی سفارش‌ها ----------
 function loadOrders() {
@@ -205,6 +208,7 @@ bot.on('text', async (ctx) => {
 
 // ---------- بررسی بلاکچین (شبکه ترون - TRC20) ----------
 async function checkPayment(expectedAmount) {
+  if (TEST_MODE) return true; // حالت تست: همیشه تایید کن، بدون چک واقعی
   try {
     const url = `https://api.trongrid.io/v1/accounts/${WALLET_ADDRESS}/transactions/trc20`;
     const res = await axios.get(url, {
@@ -241,6 +245,7 @@ async function checkPaymentByHash(hash) {
 
 bot.launch();
 console.log('ربات روشن شد ✅');
+if (TEST_MODE) console.log('⚠️ حالت تست فعاله: هر پرداختی خودکار تایید می‌شه (بدون چک واقعی بلاکچین)');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

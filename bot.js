@@ -3,7 +3,6 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const fs = require('fs');
 
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_ID = process.env.ADMIN_ID;             // آیدی عددی تلگرام خودت (فروشنده)
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS; // آدرس کیف پول USDT (شبکه TRC20)
@@ -81,12 +80,15 @@ bot.action(/check_(.+)/, async (ctx) => {
 
   if (paid) {
     order.status = 'paid';
-    order.awaitingAccount = true; // منتظر دریافت شماره اکانت متاتریدر
+    order.awaitingPlatform = true; // منتظر انتخاب نسخه متاتریدر
     orders[orderId] = order;
     saveOrders(orders);
     await ctx.reply(
-      '✅ پرداخت شما تایید شد!\n\n' +
-        'لطفاً شماره اکانت متاتریدر (MetaTrader) خودت رو همینجا برام بفرست تا اکسپرت روی همون اکانت فعال بشه.'
+      '✅ پرداخت شما تایید شد!\n\n' + 'اکسپرت رو برای کدوم نسخه متاتریدر لازم داری؟',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('MetaTrader 4', `platform_mt4_${orderId}`)],
+        [Markup.button.callback('MetaTrader 5', `platform_mt5_${orderId}`)],
+      ])
     );
   } else {
     await ctx.reply(
@@ -118,6 +120,27 @@ bot.action(/hash_(.+)/, async (ctx) => {
   );
 });
 
+// ---------- انتخاب نسخه متاتریدر (MT4 یا MT5) بعد از تایید پرداخت ----------
+bot.action(/platform_(mt4|mt5)_(.+)/, async (ctx) => {
+  const platform = ctx.match[1] === 'mt4' ? 'MetaTrader 4' : 'MetaTrader 5';
+  const orderId = ctx.match[2];
+  const orders = loadOrders();
+  const order = orders[orderId];
+  if (!order) return ctx.answerCbQuery('سفارش پیدا نشد');
+
+  order.platform = platform;
+  order.awaitingPlatform = false;
+  order.awaitingAccount = true; // حالا نوبت شماره اکانته
+  orders[orderId] = order;
+  saveOrders(orders);
+
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `باشه، نسخه ${platform} ثبت شد ✅\n\n` +
+      'حالا لطفاً شماره اکانت متاتریدر خودت رو همینجا برام بفرست تا اکسپرت روی همون اکانت فعال بشه.'
+  );
+});
+
 // ---------- دریافت پیام‌های متنی (هش تراکنش یا شماره اکانت متاتریدر) ----------
 bot.on('text', async (ctx) => {
   const orders = loadOrders();
@@ -138,12 +161,15 @@ bot.on('text', async (ctx) => {
       order.status = 'paid';
       order.txHash = hash;
       order.awaitingHash = false;
-      order.awaitingAccount = true; // حالا نوبت شماره اکانت متاتریدره
+      order.awaitingPlatform = true; // حالا نوبت انتخاب نسخه متاتریدره
       orders[orderId] = order;
       saveOrders(orders);
       await ctx.reply(
-        '✅ این تراکنش تایید شد!\n\n' +
-          'لطفاً شماره اکانت متاتریدر (MetaTrader) خودت رو همینجا برام بفرست تا اکسپرت روی همون اکانت فعال بشه.'
+        '✅ این تراکنش تایید شد!\n\n' + 'اکسپرت رو برای کدوم نسخه متاتریدر لازم داری؟',
+        Markup.inlineKeyboard([
+          [Markup.button.callback('MetaTrader 4', `platform_mt4_${orderId}`)],
+          [Markup.button.callback('MetaTrader 5', `platform_mt5_${orderId}`)],
+        ])
       );
     } else {
       await ctx.reply(
@@ -170,6 +196,7 @@ bot.on('text', async (ctx) => {
         `کاربر: @${order.username} (ID: ${order.userId})\n` +
         `مبلغ پرداختی: ${order.amount} USDT\n` +
         (order.txHash ? `هش تراکنش (تایید دستی): ${order.txHash}\n` : '') +
+        `نسخه متاتریدر: ${order.platform || 'مشخص نشده'}\n` +
         `شماره اکانت متاتریدر: ${order.accountNumber}\n\n` +
         'لطفاً فایل اکسپرت رو براش ارسال/فعال کن.'
     );

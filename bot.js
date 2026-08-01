@@ -2,9 +2,16 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const fs = require('fs');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 
+// اگه PROXY_URL توی .env تنظیم شده باشه (مثلاً چون تلگرام از این سرور فیلتره)،
+// همه‌ی درخواست‌ها (هم به تلگرام، هم به بلاکچین) از همین پروکسی محلی رد می‌شن.
+const PROXY_URL = process.env.PROXY_URL || '';
+const proxyAgent = PROXY_URL ? new SocksProxyAgent(PROXY_URL) : null;
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  telegram: proxyAgent ? { agent: proxyAgent } : {},
+});
 const ADMIN_ID = process.env.ADMIN_ID;             // آیدی عددی تلگرام خودت (فروشنده)
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS; // آدرس کیف پول USDT (شبکه TRC20)
 const BASE_PRICE = parseFloat(process.env.PRICE || '50'); // قیمت پایه به دلار (USDT)
@@ -214,6 +221,7 @@ async function checkPayment(expectedAmount) {
     const url = `https://api.trongrid.io/v1/accounts/${WALLET_ADDRESS}/transactions/trc20`;
     const res = await axios.get(url, {
       params: { limit: 50, contract_address: USDT_CONTRACT, only_confirmed: true },
+      httpsAgent: proxyAgent || undefined,
     });
     const txs = res.data.data || [];
     return txs.some((tx) => {
@@ -233,6 +241,7 @@ async function checkPaymentByHash(hash) {
     const url = `https://api.trongrid.io/v1/accounts/${WALLET_ADDRESS}/transactions/trc20`;
     const res = await axios.get(url, {
       params: { limit: 50, contract_address: USDT_CONTRACT, only_confirmed: true },
+      httpsAgent: proxyAgent || undefined,
     });
     const txs = res.data.data || [];
     return txs.some(

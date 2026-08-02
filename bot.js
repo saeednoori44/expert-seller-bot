@@ -14,12 +14,24 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 });
 const ADMIN_ID = process.env.ADMIN_ID;             // آیدی عددی تلگرام خودت (فروشنده)
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS; // آدرس کیف پول USDT (شبکه TRC20)
-const BASE_PRICE = parseFloat(process.env.PRICE || '50'); // قیمت پایه به دلار (USDT)
 const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'; // آدرس قرارداد USDT در شبکه ترون
 const ORDERS_FILE = './orders.json';
 // حالت تست: اگه TEST_MODE=true باشه، ربات بدون چک واقعی بلاکچین همه‌ی پرداخت‌ها رو
 // «تایید‌شده» در نظر می‌گیره تا بتونی بدون واریز واقعی، بقیه مراحل رو امتحان کنی.
 const TEST_MODE = process.env.TEST_MODE === 'true';
+
+// کانالی که مشتری باید عضوش باشه (یوزرنیم پابلیک، با @ شروع می‌شه)
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || '';
+// لینک عضویت که به مشتری نشون داده می‌شه (اگه خالی بود، خودش از یوزرنیم می‌سازتش)
+const CHANNEL_LINK = process.env.CHANNEL_LINK || (CHANNEL_USERNAME ? `https://t.me/${CHANNEL_USERNAME.replace('@', '')}` : '');
+
+// ---------- پلن‌های فروش (مدت و قیمت) ----------
+const PLANS = [
+  { code: '1m', label: '۱ ماهه', price: parseFloat(process.env.PRICE_1M || '100') },
+  { code: '3m', label: '۳ ماهه', price: parseFloat(process.env.PRICE_3M || '230') },
+  { code: '6m', label: '۶ ماهه', price: parseFloat(process.env.PRICE_6M || '500') },
+  { code: '1y', label: '۱ ساله', price: parseFloat(process.env.PRICE_1Y || '800') },
+];
 
 // ---------- ابزارهای ذخیره‌سازی سفارش‌ها ----------
 function loadOrders() {
@@ -30,33 +42,99 @@ function saveOrders(orders) {
   fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
 }
 
-// هر سفارش یک مبلغ منحصربه‌فرد می‌گیرد (مثلاً 50.137 به‌جای 50) تا
+// هر سفارش یک مبلغ منحصربه‌فرد می‌گیرد (مثلاً 100.137 به‌جای 100) تا
 // بشه فهمید کدوم مشتری واریز کرده، چون آدرس کیف پول برای همه یکیه.
-function generateUniqueAmount(orders) {
+function generateUniqueAmount(orders, basePrice) {
   let amount;
   do {
     const cents = Math.floor(Math.random() * 900) + 100; // بین 100 تا 999
-    amount = (BASE_PRICE + cents / 1000).toFixed(3);
+    amount = (basePrice + cents / 1000).toFixed(3);
   } while (Object.values(orders).some((o) => o.amount === amount && o.status === 'pending'));
   return amount;
 }
 
-// ---------- دستورات ربات ----------
-bot.start((ctx) => {
-  ctx.reply(
+// ---------- بررسی عضویت مشتری توی کانال ----------
+async function isChannelMember(userId) {
+  if (!CHANNEL_USERNAME) return true; // اگه کانال تنظیم نشده، این چک رو رد کن
+  try {
+    const member = await bot.telegram.getChatMember(CHANNEL_USERNAME, userId);
+    return ['member', 'administrator', 'creator'].includes(member.status);
+  } catch (err) {
+    console.error('خطا در بررسی عضویت کانال:', err.message);
+    return false;
+  }
+}
+
+// پیام خوش‌آمد + دکمه خرید (بعد از تایید عضویت کانال نشون داده می‌شه)
+async function showWelcome(ctx) {
+  await ctx.reply(
     'سلام! به فروشگاه اکسپرت خوش اومدی 👋',
     Markup.inlineKeyboard([Markup.button.callback('🛒 خرید اکسپرت', 'buy')])
   );
+}
+
+// پیام «باید عضو کانال بشی» + دکمه‌های عضویت و بررسی مجدد
+async function showJoinChannelPrompt(ctx) {
+  await ctx.reply(
+    '⚠️ برای خرید اکسپرت، اول باید عضو کانال ما بشی.\n\n' +
+      'روی دکمه «عضویت در کانال» بزن، عضو شو، بعد برگرد و «بررسی مجدد» رو بزن:',
+    Markup.inlineKeyboard([
+      [Markup.button.url('📢 عضویت در کانال', CHANNEL_LINK)],
+      [Markup.button.callback('🔄 بررسی مجدد عضویت', 'check_membership')],
+    ])
+  );
+}
+
+// ---------- دستورات ربات ----------
+bot.start(async (ctx) => {
+  const member = await isChannelMember(ctx.from.id);
+  if (member) {
+    await showWelcome(ctx);
+  } else {
+    await showJoinChannelPrompt(ctx);
+  }
+});
+
+bot.action('check_membership', async (ctx) => {
+  const member = await isChannelMember(ctx.from.id);
+  await ctx.answerCbQuery();
+  if (member) {
+    await ctx.reply('عضویتت تایید شد ✅');
+    await showWelcome(ctx);
+  } else {
+    await ctx.reply('هنوز عضو کانال نشدی. لطفاً اول عضو شو، بعد دوباره بررسی مجدد رو بزن.');
+  }
 });
 
 bot.action('buy', async (ctx) => {
+  const member = await isChannelMember(ctx.from.id);
+  if (!member) {
+    await ctx.answerCbQuery();
+    return showJoinChannelPrompt(ctx);
+  }
+
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    'اکسپرت رو برای چه مدتی می‌خوای؟',
+    Markup.inlineKeyboard(
+      PLANS.map((p) => [Markup.button.callback(`${p.label} - ${p.price}$`, `plan_${p.code}`)])
+    )
+  );
+});
+
+bot.action(/plan_(1m|3m|6m|1y)/, async (ctx) => {
+  const plan = PLANS.find((p) => p.code === ctx.match[1]);
+  if (!plan) return ctx.answerCbQuery('پلن پیدا نشد');
+
   const orders = loadOrders();
   const orderId = `${ctx.from.id}_${Date.now()}`;
-  const amount = generateUniqueAmount(orders);
+  const amount = generateUniqueAmount(orders, plan.price);
 
   orders[orderId] = {
     userId: ctx.from.id,
     username: ctx.from.username || ctx.from.first_name,
+    planLabel: plan.label,
+    planPrice: plan.price,
     amount,
     status: 'pending',
     createdAt: Date.now(),
@@ -65,7 +143,8 @@ bot.action('buy', async (ctx) => {
 
   await ctx.answerCbQuery();
   await ctx.reply(
-    'برای خرید اکسپرت، دقیقاً مبلغ زیر رو به آدرس کیف پول ارسال کن:\n\n' +
+    `پلن انتخابی: ${plan.label} (${plan.price}$)\n\n` +
+      'برای خرید اکسپرت، دقیقاً مبلغ زیر رو به آدرس کیف پول ارسال کن:\n\n' +
       `💰 مبلغ: ${amount} USDT (شبکه TRC20)\n` +
       `📥 آدرس: \`${WALLET_ADDRESS}\`\n\n` +
       '⚠️ توجه: مبلغ باید دقیقاً همین عدد باشه (تا سه رقم اعشار) تا پرداختت به‌صورت خودکار شناسایی بشه.\n\n' +
@@ -205,6 +284,7 @@ bot.on('text', async (ctx) => {
       ADMIN_ID,
       '🧾 شماره اکانت متاتریدر دریافت شد:\n' +
         `کاربر: @${order.username} (ID: ${order.userId})\n` +
+        `پلن: ${order.planLabel || 'مشخص نشده'} (${order.planPrice || order.amount}$)\n` +
         `مبلغ پرداختی: ${order.amount} USDT\n` +
         (order.txHash ? `هش تراکنش (تایید دستی): ${order.txHash}\n` : '') +
         `نسخه متاتریدر: ${order.platform || 'مشخص نشده'}\n` +
